@@ -1,52 +1,68 @@
-"""Зберігання фільмів у текстовому файлі.
+"""Зберігання фільмів у базі даних SQLite (файл data.db).
 
-Формат файла: один фільм на рядок, поля через крапку з комою:
-    назва;рік;статус;оцінка;дата
-Приклад:
-    Інтерстеллар;2014;переглянуто;9;2026-10-03
+У лабораторній 6 фільми лежали в текстовому файлі data.txt.
+Тепер вони в таблиці movies бази SQLite. logic.py від цього не змінився:
+він, як і раніше, отримує список словників.
 
-У лабораторній 7 цей файл буде замінено на SQLite, а logic.py і cli.py
-майже не зміняться.
+ВАЖЛИВО: значення в SQL-запити підставляються ТІЛЬКИ через знак ?,
+ніколи через f-рядок. Інакше можлива SQL-ін'єкція.
 """
 
-import sys
+import sqlite3
 
-import logic
-
-
-def parse_line(line):
-    """Перетворює рядок файла на словник. Якщо рядок пошкоджений, кидає ValueError."""
-    parts = line.split(";")
-    if len(parts) != 5:
-        raise ValueError(f"очікувалось 5 полів, а знайдено {len(parts)}")
-    # Ті самі перевірки, що й для команди add: рік, статус, оцінка, дата.
-    return logic.make_record(parts[0], parts[1], parts[2], parts[3], parts[4])
+DB = "data.db"  # тести підмінюють це значення на тимчасову базу
 
 
-def load(filename):
-    """Повертає список словників з файла. Пошкоджені рядки пропускає."""
-    records = []
-    try:
-        f = open(filename, "r", encoding="utf-8")
-    except FileNotFoundError:
-        return records  # файла ще немає: це нормально, просто порожній список
-
-    with f:
-        for number, line in enumerate(f, start=1):
-            line = line.strip()
-            if line == "":
-                continue
-            try:
-                records.append(parse_line(line))
-            except ValueError as error:
-                # Пишемо у stderr (потік помилок), щоб не змішувати з корисним виводом.
-                print(f"увага: рядок {number} пошкоджений і пропущений ({error}): {line}",
-                      file=sys.stderr)
-    return records
+def connect():
+    """Відкриває з'єднання з базою."""
+    conn = sqlite3.connect(DB)
+    conn.row_factory = sqlite3.Row  # рядки можна перетворити на словники
+    return conn
 
 
-def save(filename, records):
-    """Записує всі фільми у файл (повністю перезаписує його)."""
-    with open(filename, "w", encoding="utf-8") as f:
-        for r in records:
-            f.write(f"{r['title']};{r['year']};{r['status']};{r['rating']};{r['date']}\n")
+def init():
+    """Створює таблицю, якщо її ще немає."""
+    with connect() as conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS movies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            year INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            rating INTEGER NOT NULL,
+            date TEXT NOT NULL)""")
+    conn.close()
+
+
+def load(status=None):
+    """Повертає список словників-фільмів. Якщо задано status, лише з цим статусом."""
+    with connect() as conn:
+        if status is None:
+            rows = conn.execute("SELECT * FROM movies ORDER BY date, id").fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM movies WHERE status = ? ORDER BY date, id",
+                                (status,)).fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        result.append(dict(row))
+    return result
+
+
+def add(movie):
+    """Додає фільм (словник з logic.make_record) і повертає його id."""
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO movies (title, year, status, rating, date) VALUES (?, ?, ?, ?, ?)",
+            (movie["title"], movie["year"], movie["status"], movie["rating"], movie["date"]))
+        new_id = cur.lastrowid
+    conn.close()
+    return new_id
+
+
+def delete(movie_id):
+    """Видаляє фільм за id. Повертає True, якщо такий був."""
+    with connect() as conn:
+        cur = conn.execute("DELETE FROM movies WHERE id = ?", (movie_id,))
+        deleted = cur.rowcount > 0
+    conn.close()
+    return deleted
