@@ -5,14 +5,16 @@
     python3 cli.py list
     python3 cli.py find status заплановано
     python3 cli.py report
+  python3 cli.py delete ID
+    python3 cli.py delete 5
+
+З лабораторної 7 дані зберігаються в базі SQLite (data.db), а не в data.txt.
 """
 
 import sys
 
 import logic
 import storage
-
-FILE = "data.txt"
 
 USAGE = """використання:
   python3 cli.py add НАЗВА РІК СТАТУС [ОЦІНКА] [ДАТА]
@@ -28,15 +30,15 @@ USAGE = """використання:
 def format_movie(r):
     """Один фільм у вигляді рядка таблиці."""
     rating = "-" if r["rating"] == 0 else f"{r['rating']}/10"
-    return f"{r['title'][:30]:<30} {r['year']:>4}  {r['status']:<12} {rating:>5}  {r['date']}"
+    return f"{r['id']:>4}  {r['title'][:30]:<30} {r['year']:>4}  {r['status']:<12} {rating:>5}  {r['date']}"
 
 
 def print_table(records):
     if len(records) == 0:
         print("нічого не знайдено")
         return
-    print(f"{'Назва':<30} {'Рік':>4}  {'Статус':<12} {'Оцінка':>5}  Дата")
-    print("-" * 70)
+    print(f"{'id':>4}  {'Назва':<30} {'Рік':>4}  {'Статус':<12} {'Оцінка':>5}  Дата")
+    print("-" * 76)
     for r in records:
         print(format_movie(r))
     print(f"\nвсього: {len(records)}")
@@ -55,8 +57,7 @@ def cmd_add(args, records):
     except ValueError as error:
         print("помилка:", error)
         return
-    records.append(movie)
-    storage.save(FILE, records)
+    movie["id"] = storage.add(movie)
     print("додано:", format_movie(movie))
 
 
@@ -70,6 +71,21 @@ def cmd_find(args, records):
         print("помилка:", error)
         return
     print_table(found)
+
+
+def cmd_delete(args):
+    if len(args) < 1:
+        print("для delete потрібен id фільму, наприклад: delete 5")
+        return
+    try:
+        movie_id = int(args[0])
+    except ValueError:
+        print("помилка: id має бути цілим числом, а не", repr(args[0]))
+        return
+    if storage.delete(movie_id):
+        print("видалено фільм з id", movie_id)
+    else:
+        print("фільм з id", movie_id, "не знайдено")
 
 
 def cmd_report(records):
@@ -98,7 +114,8 @@ def main():
         return
     command = sys.argv[1]
     args = sys.argv[2:]
-    records = storage.load(FILE)
+    storage.init()
+    records = storage.load()
 
     if command == "add":
         cmd_add(args, records)
@@ -108,6 +125,8 @@ def main():
         cmd_find(args, records)
     elif command == "report":
         cmd_report(records)
+    elif command == "delete":
+        cmd_delete(args)
     else:
         print("невідома команда:", command)
         print(USAGE)
