@@ -1,4 +1,4 @@
-"""Перевірки функцій з logic.py і storage.py. Запуск: python3 tests.py"""
+"""Перевірки logic.py, storage.py (SQLite) і app.py (Flask). Запуск: python3 tests.py"""
 
 import os
 
@@ -72,22 +72,83 @@ def test_top_rated():
 
 
 def test_storage():
-    filename = "test_data.txt"
+    """Перевіряє роботу з базою SQLite на тимчасовому файлі test_data.db."""
+    old_db = storage.DB
+    storage.DB = "test_data.db"
     try:
-        storage.save(filename, MOVIES)
-        assert storage.load(filename) == MOVIES      # що записали, те й прочитали
-        # дописуємо сміття: програма має пропустити ці рядки, а не впасти
-        with open(filename, "a", encoding="utf-8") as f:
-            f.write("зламаний рядок\n")
-            f.write("Фільм;не_рік;переглянуто;5;2026-10-01\n")
-            f.write("Фільм;2000;колись;5;2026-10-01\n")
-            f.write("Фільм;2000;переглянуто;99;2026-10-01\n")
-            f.write("\n")
-        assert storage.load(filename) == MOVIES
+        if os.path.exists(storage.DB):
+            os.remove(storage.DB)
+        storage.init()
+        assert storage.load() == []                     # порожня база
+        ids = [storage.add(m) for m in MOVIES]
+        assert ids == [1, 2, 3, 4, 5]                   # id видаються по порядку
+        loaded = storage.load()
+        assert len(loaded) == 5
+        for movie in loaded:                            # без id — ті самі словники
+            movie_without_id = dict(movie)
+            del movie_without_id["id"]
+            assert movie_without_id in MOVIES
+        assert len(storage.load("переглянуто")) == 3    # фільтр за статусом
+        assert storage.load("немає такого") == []
+        assert storage.delete(2) is True                # видалили
+        assert storage.delete(2) is False               # вдруге вже нічого видаляти
+        assert len(storage.load()) == 4
+        # SQL-ін'єкція: текст зберігається як звичайна назва, таблиця ціла
+        evil = dict(MOVIES[0], title="'; DROP TABLE movies; --")
+        storage.add(evil)
+        assert storage.load("' OR '1'='1") == []
+        assert any(m["title"] == evil["title"] for m in storage.load())
     finally:
-        if os.path.exists(filename):
-            os.remove(filename)
-    assert storage.load("файла_точно_немає.txt") == []
+        storage.DB = old_db
+        if os.path.exists("test_data.db"):
+            os.remove("test_data.db")
+
+
+def test_app():
+    """Перевіряє маршрути Flask без запуску сервера (test_client)."""
+    old_db = storage.DB
+    storage.DB = "test_app.db"
+    try:
+        if os.path.exists(storage.DB):
+            os.remove(storage.DB)
+        import app as webapp
+        storage.init()
+        client = webapp.app.test_client()
+
+        assert client.get("/movies").get_json() == []
+        r = client.post("/movies", json={"title": "Матриця", "year": 1999,
+                                         "status": "переглянуто", "rating": 10})
+        assert r.status_code == 201 and r.get_json()["id"] == 1
+        client.post("/movies", json={"title": "Дюна", "year": 2021, "status": "заплановано"})
+        assert len(client.get("/movies").get_json()) == 2
+        assert len(client.get("/movies?status=заплановано").get_json()) == 1
+        assert len(client.get("/movies?title=дюн").get_json()) == 1
+        assert client.get("/report").get_json()["total"] == 2
+
+        # неправильні запити: 400 / 404 / 405, але ніколи не 500
+        assert client.post("/movies").status_code == 400                       # без тіла
+        assert client.post("/movies", data="hello").status_code == 400         # не JSON
+        assert client.post("/movies", json=[1, 2]).status_code == 400          # не об'єкт
+        assert client.post("/movies", json={"title": "А"}).status_code == 400  # немає полів
+        assert client.post("/movies", json={"title": "А", "year": "абв",
+                                            "status": "переглянуто"}).status_code == 400
+        assert client.post("/movies", json={"title": "А", "year": 2000,
+                                            "status": "переглянуто", "rating": 15}).status_code == 400
+        assert client.post("/movies", json={"title": None, "year": 2000,
+                                            "status": "переглянуто"}).status_code == 400
+        assert client.post("/movies", json={"title": "А", "year": True,
+                                            "status": "переглянуто"}).status_code == 400
+        assert client.get("/movies?status=колись").status_code == 400
+        assert client.get("/movies?year=давно").status_code == 400
+        assert client.delete("/movies/999").status_code == 404
+        assert client.delete("/movies/abc").status_code == 404
+        assert client.get("/nema").status_code == 404
+        assert client.put("/movies").status_code == 405
+        assert client.delete("/movies/1").status_code == 200
+    finally:
+        storage.DB = old_db
+        if os.path.exists("test_app.db"):
+            os.remove("test_app.db")
 
 
 if __name__ == "__main__":
@@ -97,4 +158,5 @@ if __name__ == "__main__":
     test_average_rating()
     test_top_rated()
     test_storage()
+    test_app()
     print("усі тести пройдено")
