@@ -11,11 +11,13 @@
 """
 
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 
 import logic
 import storage
 
 app = Flask(__name__)
+CORS(app, origins=["https://vhritsun.pp.ua", "http://localhost:8080"])
 app.json.ensure_ascii = False  # щоб кирилиця в JSON була читабельною, а не ф...
 app.json.mimetype = "application/json; charset=utf-8"
 storage.init()
