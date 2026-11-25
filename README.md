@@ -104,3 +104,55 @@
 ## Безпека
 
 Усі SQL-запити використовують підстановку через `?`, тому SQL-ін'єкція неможлива.
+
+
+## Розгортання
+
+Сервіс працює в інтернеті: https://api.vhritsun.pp.ua/movies
+
+Сервер: Oracle Cloud Always Free (Frankfurt), Ubuntu 24.04, shape VM.Standard.A1.Flex.
+Замість Google Cloud обрано Oracle Cloud, бо Google вимагав передоплату.
+
+Схема: інтернет → nginx (80/443, HTTPS) → gunicorn (127.0.0.1:8000) → Flask (app.py) → SQLite (data.db).
+
+### Безпека
+- вхід лише за ssh-ключем: `PasswordAuthentication no`, `PermitRootLogin no`
+- фаєрвол (iptables, на Oracle замість ufw) пропускає лише порти 22, 80, 443
+- у мережі Oracle (Network Security Group) відкрито вхідні порти 80 і 443
+
+### Команди на сервері
+
+    sudo apt update && sudo apt upgrade -y
+    sudo apt install -y git python3-venv python3-pip nginx sqlite3
+
+    git clone https://github.com/Vlad-cell-pixel/movies.git
+    cd movies
+    python3 -m venv venv
+    source venv/bin/activate
+    pip install -r requirements.txt
+    python3 tests.py
+    python3 seed.py
+
+    sudo cp deploy/movies.service /etc/systemd/system/
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now movies
+
+    sudo cp deploy/nginx.conf /etc/nginx/sites-available/movies
+    sudo ln -s /etc/nginx/sites-available/movies /etc/nginx/sites-enabled/
+    sudo rm /etc/nginx/sites-enabled/default
+    sudo nginx -t && sudo systemctl reload nginx
+
+    sudo apt install -y certbot python3-certbot-nginx
+    sudo certbot --nginx -d api.vhritsun.pp.ua
+    sudo certbot renew --dry-run
+
+### Оновлення коду
+
+    cd ~/movies && git pull && sudo systemctl restart movies
+
+### Перевірка
+
+    curl https://api.vhritsun.pp.ua/report
+    curl -i -X POST https://api.vhritsun.pp.ua/movies \
+         -H "Content-Type: application/json" \
+         -d '{"title": "Дюна", "year": 2021, "status": "переглянуто", "rating": 8}'
