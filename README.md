@@ -117,7 +117,7 @@
 
 ### Безпека
 - вхід лише за ssh-ключем: `PasswordAuthentication no`, `PermitRootLogin no`
-- фаєрвол (iptables, на Oracle замість ufw) пропускає лише порти 22, 80, 443
+- фаєрвол ufw: порт 22 відкритий, 80 і 443 лише з адрес Cloudflare
 - у мережі Oracle (Network Security Group) відкрито вхідні порти 80 і 443
 
 ### Команди на сервері
@@ -156,3 +156,30 @@
     curl -i -X POST https://api.vhritsun.pp.ua/movies \
          -H "Content-Type: application/json" \
          -d '{"title": "Дюна", "year": 2021, "status": "переглянуто", "rating": 8}'
+
+
+## Cloudflare і фронтенд
+
+Сайт: https://vhritsun.pp.ua (Netlify, папка `frontend/`). API: https://api.vhritsun.pp.ua (через Cloudflare).
+
+- DNS домену обслуговує Cloudflare; запис `api` проксується (IP сервера прихований)
+- SSL/TLS: Full (strict), Always Use HTTPS
+- rate limiting: шлях `/movies`, більше 20 запитів за 10 секунд — блок
+- Bot Fight Mode увімкнено, кеш для `api.vhritsun.pp.ua` вимкнено
+- CORS дозволяє запити лише з https://vhritsun.pp.ua
+- у фронтенді дані виводяться через `textContent` (захист від XSS)
+
+Фаєрвол сервера (порти 80 і 443 лише для Cloudflare):
+
+    sudo ufw default deny incoming
+    sudo ufw default allow outgoing
+    sudo ufw allow OpenSSH
+    for ip in $(curl -s https://www.cloudflare.com/ips-v4); do
+        sudo ufw allow proto tcp from $ip to any port 80,443
+    done
+    sudo ufw enable
+
+Справжній IP відвідувача для nginx (`/etc/nginx/conf.d/cloudflare.conf`):
+
+    curl -s https://www.cloudflare.com/ips-v4 | sed 's/.*/set_real_ip_from &;/' | sudo tee /etc/nginx/conf.d/cloudflare.conf
+    echo "real_ip_header CF-Connecting-IP;" | sudo tee -a /etc/nginx/conf.d/cloudflare.conf
