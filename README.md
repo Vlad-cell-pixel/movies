@@ -183,3 +183,54 @@
 
     curl -s https://www.cloudflare.com/ips-v4 | sed 's/.*/set_real_ip_from &;/' | sudo tee /etc/nginx/conf.d/cloudflare.conf
     echo "real_ip_header CF-Connecting-IP;" | sudo tee -a /etc/nginx/conf.d/cloudflare.conf
+
+
+## Адмінка
+
+Адміністративні маршрути доступні лише через VPN Tailscale і лише з токеном у заголовку `X-Admin-Token`:
+
+- `DELETE /admin/movies/<id>` — видалити фільм
+- `GET /admin/export` — усі фільми одним списком
+- `POST /admin/import` — додати список фільмів (спершу перевіряються всі, потім додаються)
+
+Токен лежить у `.env` на сервері (`ADMIN_TOKEN=...`), systemd підхоплює його через
+`EnvironmentFile` у `deploy/movies.service`. `.env` є в `.gitignore` і в git не потрапляє.
+Згенерувати новий токен:
+
+    python3 -c "import secrets; print('ADMIN_TOKEN=' + secrets.token_urlsafe(32))" > .env
+
+Виклик (з пристрою, підключеного до Tailscale):
+
+    curl -H "X-Admin-Token: $TOKEN" http://АДРЕСА_СЕРВЕРА_В_TAILSCALE/admin/export
+
+nginx: за доменом `/admin/` закрито (`deny all`), окремий блок `deploy/nginx-admin.conf`
+пропускає `/admin/` лише з мережі Tailscale `100.64.0.0/10`.
+
+Застереження: статичний токен — навчальне спрощення; у реальній системі адмін входить
+під власним обліковим записом з роллю і журналом дій, а секрети лежать у менеджері секретів.
+
+## Супровід
+
+- fail2ban: 5 невдалих спроб входу за 10 хвилин — бан на 1 годину (`/etc/fail2ban/jail.local`)
+- резервні копії: cron щодня о 3:00 (UTC) робить `sqlite3 data.db ".backup ..."` у `~/backups`,
+  копії старші за 14 днів видаляються; відновлення перевірено
+
+## Безпека: аудит
+
+| Загроза | Як перевірено | Результат | Чим закрито |
+|---|---|---|---|
+| SQL-ін'єкція | POST з назвою `x'); DROP TABLE movies; --` → 400; тест `test_storage` з `'; DROP TABLE movies; --` | закрито | валідація в `logic.py` + параметри `?` у всіх SQL-запитах |
+| XSS у фронтенді | фільм з назвою `<img src=x onerror=alert(1)>` показано як текст | закрито | `textContent` замість `innerHTML` |
+| зайвий вхід на сервер | `ssh root@IP`, `ssh` без ключа → Permission denied | закрито | `PermitRootLogin no`, `PasswordAuthentication no` |
+| обхід Cloudflare | `curl -k https://IP` → timed out | закрито | ufw: 80 і 443 лише з адрес Cloudflare |
+| обхід Cloudflare через старий DNS | кеш роутера давав прямий IP → curl: timed out | закрито | ufw: 80 і 443 лише з адрес Cloudflare |
+| флуд запитами | 60 паралельних GET → частина відповідей 429 | закрито | rate limiting у Cloudflare |
+| видалення даних сторонніми | `DELETE /admin/movies/1` за доменом → 403 | закрито | nginx `deny` для /admin/ за доменом, доступ лише з Tailscale, токен |
+| секрети в git | `git log -p \| grep -c ТОКЕН` → 0 | закрито | `.env`, `.gitignore` |
+| втрата даних | копію з `~/backups` відкрито на ноутбуці, 23 фільми | закрито | cron щодня, `.backup`, копії 14 днів |
+| відкриті порти | `nc -zv IP 22 80 443 8000` → відкритий лише 22 | закрито | ufw |
+| застарілі пакети | `apt list --upgradable` | закрито | `apt upgrade`, unattended-upgrades |
+| підбір пароля ssh | `fail2ban-client status sshd` | закрито | fail2ban |
+
+Відкрите і прийнятне: порт 22 доступний з інтернету (потрібен для керування сервером),
+але вхід лише за ключем, а підбір блокує fail2ban.
