@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Мої фільми</title>
+  <style>
+    body { font-family: -apple-system, system-ui, sans-serif; max-width: 680px; margin: 2rem auto; padding: 0 1rem; color: #222; background: #fafafa; }
+    h1 { margin-bottom: .2rem; }
+    .stats { color: #666; margin-top: 0; }
+    form { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; background: #fff; padding: 1rem; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+    form input, form select, form button { font-size: 1rem; padding: .5rem; border: 1px solid #ccc; border-radius: 6px; }
+    #title { grid-column: 1 / -1; }
+    form button { grid-column: 1 / -1; background: #2563eb; color: #fff; border: none; cursor: pointer; }
+    #status-msg { min-height: 1.2rem; }
+    .ok { color: #15803d; }
+    .error { color: #b91c1c; }
+    .filters { margin: 1rem 0 .5rem; }
+    .filters button { padding: .3rem .7rem; margin-right: .3rem; border: 1px solid #ccc; border-radius: 999px; background: #fff; cursor: pointer; }
+    .filters button.active { background: #222; color: #fff; }
+    ul { list-style: none; padding: 0; }
+    li { display: flex; justify-content: space-between; align-items: center; padding: .6rem .2rem; border-bottom: 1px solid #e5e5e5; }
+    .movie-title { font-weight: 600; }
+    .meta { color: #777; font-size: .9rem; }
+    .rating { font-weight: 600; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <h1>🎬 Мої фільми</h1>
+  <p class="stats" id="stats"></p>
+
+  <form id="form">
+    <input id="title" placeholder="назва фільму" required>
+    <input id="year" type="number" placeholder="рік" min="1888" max="2100" required>
+    <select id="status">
+      <option value="заплановано">заплановано</option>
+      <option value="дивлюсь">дивлюсь</option>
+      <option value="переглянуто">переглянуто</option>
+    </select>
+    <input id="rating" type="number" placeholder="оцінка 1–10" min="0" max="10">
+    <button>Додати</button>
+  </form>
+  <p id="status-msg"></p>
+
+  <div class="filters">
+    <button data-filter="" class="active">усі</button>
+    <button data-filter="переглянуто">переглянуто</button>
+    <button data-filter="дивлюсь">дивлюсь</button>
+    <button data-filter="заплановано">заплановано</button>
+  </div>
+  <ul id="list"></ul>
+
+  <script>
+    // Адреса нашого API (вебсервісу з лабораторних 7–8)
+    const API = "https://api.vhritsun.pp.ua";
+    let currentFilter = "";
+
+    // Показати повідомлення під формою
+    function showMessage(text, isError) {
+      const msg = document.getElementById("status-msg");
+      msg.textContent = text;
+      msg.className = isError ? "error" : "ok";
+    }
+
+    // Завантажити звіт (скільки фільмів, середня оцінка)
+    async function loadStats() {
+      const response = await fetch(API + "/report");
+      const report = await response.json();
+      const avg = report.average_rating === null ? "—" : report.average_rating;
+      document.getElementById("stats").textContent =
+        `Усього: ${report.total} · середня оцінка: ${avg}`;
+    }
+
+    // Завантажити список фільмів (з фільтром за статусом, якщо вибрано)
+    async function loadMovies() {
+      let url = API + "/movies";
+      if (currentFilter) {
+        url += "?status=" + encodeURIComponent(currentFilter);
+      }
+      const response = await fetch(url);
+      const movies = await response.json();
+
+      const list = document.getElementById("list");
+      list.innerHTML = "";  // очистити старий список (тут ми не вставляємо чужі дані)
+      for (const movie of movies) {
+        const li = document.createElement("li");
+
+        const left = document.createElement("div");
+        const title = document.createElement("div");
+        title.className = "movie-title";
+        title.textContent = movie.title;               // textContent, НЕ innerHTML: захист від XSS
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = `${movie.year} · ${movie.status} · ${movie.date}`;
+        left.appendChild(title);
+        left.appendChild(meta);
+
+        const rating = document.createElement("div");
+        rating.className = "rating";
+        rating.textContent = movie.rating > 0 ? `★ ${movie.rating}/10` : "—";
+
+        li.appendChild(left);
+        li.appendChild(rating);
+        list.appendChild(li);
+      }
+      if (movies.length === 0) {
+        const li = document.createElement("li");
+        li.textContent = "нічого не знайдено";
+        list.appendChild(li);
+      }
+    }
+
+    // Оновити все на сторінці
+    async function refresh() {
+      try {
+        await Promise.all([loadMovies(), loadStats()]);
+      } catch (error) {
+        showMessage("не вдалося зв'язатися з сервером", true);
+      }
+    }
+
+    // Надсилання форми: POST /movies
+    document.getElementById("form").addEventListener("submit", async (event) => {
+      event.preventDefault();  // не перезавантажувати сторінку
+      const body = {
+        title: document.getElementById("title").value,
+        year: document.getElementById("year").value,
+        status: document.getElementById("status").value,
+        rating: document.getElementById("rating").value || 0,
+      };
+      try {
+        const response = await fetch(API + "/movies", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const result = await response.json();
+        if (response.ok) {
+          showMessage("додано: " + result.title, false);
+          document.getElementById("form").reset();
+        } else {
+          showMessage("помилка: " + result.error, true);
+        }
+      } catch (error) {
+        showMessage("не вдалося зв'язатися з сервером", true);
+      }
+      refresh();
+    });
+
+    // Кнопки-фільтри за статусом
+    for (const button of document.querySelectorAll(".filters button")) {
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".filters button").forEach(b => b.classList.remove("active"));
+        button.classList.add("active");
+        currentFilter = button.dataset.filter;
+        loadMovies();
+      });
+    }
+
+    refresh();
+  </script>
+</body>
+</html>
