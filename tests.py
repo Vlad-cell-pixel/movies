@@ -140,15 +140,64 @@ def test_app():
                                             "status": "переглянуто"}).status_code == 400
         assert client.get("/movies?status=колись").status_code == 400
         assert client.get("/movies?year=давно").status_code == 400
-        assert client.delete("/movies/999").status_code == 404
-        assert client.delete("/movies/abc").status_code == 404
         assert client.get("/nema").status_code == 404
         assert client.put("/movies").status_code == 405
-        assert client.delete("/movies/1").status_code == 200
+        assert client.delete("/movies/1").status_code == 404   # публічного видалення більше немає
     finally:
         storage.DB = old_db
         if os.path.exists("test_app.db"):
             os.remove("test_app.db")
+
+
+def test_admin():
+    """Адмін-маршрути: без правильного токена 403, з токеном працюють."""
+    old_db = storage.DB
+    old_token = os.environ.get("ADMIN_TOKEN")
+    storage.DB = "test_admin.db"
+    try:
+        if os.path.exists(storage.DB):
+            os.remove(storage.DB)
+        import app as webapp
+        storage.init()
+        client = webapp.app.test_client()
+        good = {"X-Admin-Token": "test-token-123"}
+        bad = {"X-Admin-Token": "wrong"}
+
+        # токен на сервері не налаштований: адмінка закрита навіть для "порожнього" токена
+        os.environ.pop("ADMIN_TOKEN", None)
+        assert client.get("/admin/export").status_code == 403
+        assert client.get("/admin/export", headers={"X-Admin-Token": ""}).status_code == 403
+
+        os.environ["ADMIN_TOKEN"] = "test-token-123"
+        assert client.get("/admin/export").status_code == 403                 # без заголовка
+        assert client.get("/admin/export", headers=bad).status_code == 403    # чужий токен
+        assert client.delete("/admin/movies/1", headers=bad).status_code == 403
+        assert client.post("/admin/import", json=[], headers=bad).status_code == 403
+
+        # імпорт: усе або нічого
+        r = client.post("/admin/import", headers=good, json=[
+            {"title": "Матриця", "year": 1999, "status": "переглянуто", "rating": 10},
+            {"title": "Дюна", "year": 2021, "status": "заплановано"}])
+        assert r.status_code == 201 and r.get_json() == {"imported": 2}
+        r = client.post("/admin/import", headers=good, json=[
+            {"title": "Добрий", "year": 2000, "status": "переглянуто"},
+            {"title": "Поганий", "year": "абв", "status": "переглянуто"}])
+        assert r.status_code == 400                                          # другий фільм поганий
+        assert len(client.get("/admin/export", headers=good).get_json()) == 2  # перший теж не додався
+        assert client.post("/admin/import", headers=good, json={"a": 1}).status_code == 400
+
+        # видалення
+        assert client.delete("/admin/movies/1", headers=good).status_code == 200
+        assert client.delete("/admin/movies/1", headers=good).status_code == 404
+        assert [m["title"] for m in client.get("/admin/export", headers=good).get_json()] == ["Дюна"]
+    finally:
+        storage.DB = old_db
+        if old_token is None:
+            os.environ.pop("ADMIN_TOKEN", None)
+        else:
+            os.environ["ADMIN_TOKEN"] = old_token
+        if os.path.exists("test_admin.db"):
+            os.remove("test_admin.db")
 
 
 if __name__ == "__main__":
@@ -159,4 +208,5 @@ if __name__ == "__main__":
     test_top_rated()
     test_storage()
     test_app()
+    test_admin()
     print("усі тести пройдено")

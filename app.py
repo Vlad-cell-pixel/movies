@@ -6,11 +6,18 @@
     GET    /movies                 усі фільми (JSON)
     GET    /movies?status=...      фільтр за статусом (також title, year, rating)
     POST   /movies                 додати фільм (JSON у тілі запиту)
-    DELETE /movies/<id>            видалити фільм за id
     GET    /report                 звіт
+
+Адміністративні маршрути (потрібен заголовок X-Admin-Token, доступ лише через VPN):
+    DELETE /admin/movies/<id>      видалити фільм за id
+    GET    /admin/export           усі фільми одним списком (резервна копія)
+    POST   /admin/import           додати багато фільмів зі списку JSON
 """
 
-from flask import Flask, request, jsonify
+import os
+import secrets
+
+from flask import Flask, request, jsonify, abort
 from flask_cors import CORS
 
 import logic
@@ -45,7 +52,7 @@ def index():
     return jsonify({
         "service": "Фільми",
         "routes": ["GET /movies", "GET /movies?status=...", "POST /movies",
-                   "DELETE /movies/<id>", "GET /report"],
+                   "GET /report"],
     })
 
 
@@ -68,35 +75,82 @@ def list_movies():
     return jsonify(movies)
 
 
+def movie_from_json(data):
+    """Перевіряє один фільм з JSON і повертає словник. Помилка -> ValueError."""
+    if not isinstance(data, dict):
+        raise ValueError("очікується JSON-об'єкт")
+    for field in ("title", "year", "status"):
+        if field not in data:
+            raise ValueError(f"немає поля {field}")
+    for field, value in data.items():
+        # null, true/false, списки і вкладені об'єкти не приймаємо
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            raise ValueError(f"поле {field} має бути текстом або числом")
+    return logic.make_record(
+        str(data["title"]), str(data["year"]), str(data["status"]),
+        str(data.get("rating", 0)), str(data.get("date", "")))
+
+
 @app.post("/movies")
 def add_movie():
     """Додає фільм. Очікує JSON: {"title", "year", "status", "rating"?, "date"?}."""
     data = request.get_json(silent=True)  # silent=True: None замість падіння
     if not isinstance(data, dict):
         return jsonify({"error": "очікується JSON-об'єкт у тілі запиту"}), 400
-    for field in ("title", "year", "status"):
-        if field not in data:
-            return jsonify({"error": f"немає поля {field}"}), 400
-    for field, value in data.items():
-        # null, true/false, списки і вкладені об'єкти не приймаємо
-        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
-            return jsonify({"error": f"поле {field} має бути текстом або числом"}), 400
     try:
-        movie = logic.make_record(
-            str(data["title"]), str(data["year"]), str(data["status"]),
-            str(data.get("rating", 0)), str(data.get("date", "")))
+        movie = movie_from_json(data)
     except ValueError as error:
         return jsonify({"error": str(error)}), 400
     movie["id"] = storage.add(movie)
     return jsonify(movie), 201
 
 
-@app.delete("/movies/<int:movie_id>")
+# ---------- Адміністративні маршрути ----------
+
+def require_admin():
+    """Пускає далі лише запит з правильним заголовком X-Admin-Token.
+
+    Токен береться з оточення (файл .env на сервері), а не з коду.
+    Якщо токен на сервері не налаштований, адмінка закрита для всіх.
+    """
+    expected = os.environ.get("ADMIN_TOKEN")
+    given = request.headers.get("X-Admin-Token", "")
+    if not expected or not secrets.compare_digest(given, expected):
+        abort(403)
+
+
+@app.delete("/admin/movies/<int:movie_id>")
 def delete_movie(movie_id):
     """Видаляє фільм за id."""
+    require_admin()
     if storage.delete(movie_id):
         return jsonify({"deleted": movie_id})
     return jsonify({"error": f"фільм з id {movie_id} не знайдено"}), 404
+
+
+@app.get("/admin/export")
+def export_movies():
+    """Віддає всі фільми одним списком."""
+    require_admin()
+    return jsonify(storage.load())
+
+
+@app.post("/admin/import")
+def import_movies():
+    """Додає список фільмів. Спершу перевіряє всі, і лише потім додає (все або нічого)."""
+    require_admin()
+    data = request.get_json(silent=True)
+    if not isinstance(data, list):
+        return jsonify({"error": "очікується JSON-список фільмів"}), 400
+    movies = []
+    for number, item in enumerate(data, start=1):
+        try:
+            movies.append(movie_from_json(item))
+        except ValueError as error:
+            return jsonify({"error": f"фільм №{number}: {error}"}), 400
+    for movie in movies:
+        storage.add(movie)
+    return jsonify({"imported": len(movies)}), 201
 
 
 @app.get("/report")
@@ -111,7 +165,12 @@ def report():
     })
 
 
-# Невідома адреса або неправильний метод: теж JSON, а не HTML-сторінка.
+# Невідома адреса, заборонено або неправильний метод: теж JSON, а не HTML-сторінка.
+@app.errorhandler(403)
+def forbidden(error):
+    return jsonify({"error": "доступ заборонено"}), 403
+
+
 @app.errorhandler(404)
 def not_found(error):
     return jsonify({"error": "такої адреси немає"}), 404
