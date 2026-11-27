@@ -1,0 +1,33 @@
+# На кожен push у master: спершу тести, і ЛИШЕ якщо вони зелені — оновлення сервера.
+name: ci
+on:
+  push:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: pytest -v
+
+  deploy:
+    needs: test                  # якщо test червоний, deploy навіть не почнеться
+    runs-on: ubuntu-latest
+    steps:
+      - uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -e
+            cd ~/movies
+            git pull
+            docker compose up -d --build
+            sleep 5
+            curl -fsS http://127.0.0.1:8000/health
