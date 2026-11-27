@@ -1,14 +1,14 @@
 """Консольний інтерфейс списку фільмів.
 
-Приклади:
-    python3 cli.py add "Інтерстеллар" 2014 переглянуто 9
-    python3 cli.py list
-    python3 cli.py find status заплановано
-    python3 cli.py report
-  python3 cli.py delete ID
-    python3 cli.py delete 5
+Першим словом іде ЛОГІН користувача, з чиїми фільмами працюємо (з лабораторної 12):
+    python3 cli.py vlad add "Інтерстеллар" 2014 переглянуто 9
+    python3 cli.py vlad list
+    python3 cli.py vlad find status заплановано
+    python3 cli.py vlad report
+    python3 cli.py vlad delete 5
 
-З лабораторної 7 дані зберігаються в базі SQLite (data.db), а не в data.txt.
+Пароль тут не питається: хто має доступ до файлу data.db на сервері,
+той і так має доступ до всього. Захист паролем — для вебсервісу.
 """
 
 import sys
@@ -17,10 +17,11 @@ import logic
 import storage
 
 USAGE = """використання:
-  python3 cli.py add НАЗВА РІК СТАТУС [ОЦІНКА] [ДАТА]
-  python3 cli.py list
-  python3 cli.py find title|status|year|rating ЗНАЧЕННЯ
-  python3 cli.py report
+  python3 cli.py ЛОГІН add НАЗВА РІК СТАТУС [ОЦІНКА] [ДАТА]
+  python3 cli.py ЛОГІН list
+  python3 cli.py ЛОГІН find title|status|year|rating ЗНАЧЕННЯ
+  python3 cli.py ЛОГІН report
+  python3 cli.py ЛОГІН delete ID
 
 статуси: """ + ", ".join(logic.STATUSES) + """
 оцінка: 0-10 (0 або нічого = ще не оцінено); дата: РРРР-ММ-ДД (нічого = сьогодні)
@@ -44,7 +45,7 @@ def print_table(records):
     print(f"\nвсього: {len(records)}")
 
 
-def cmd_add(args, records):
+def cmd_add(args, user_id):
     if len(args) < 3:
         print("для add потрібні щонайменше НАЗВА, РІК і СТАТУС")
         print(USAGE)
@@ -57,7 +58,7 @@ def cmd_add(args, records):
     except ValueError as error:
         print("помилка:", error)
         return
-    movie.id = storage.add(movie)
+    movie.id = storage.add(movie, user_id)
     print("додано:", format_movie(movie))
 
 
@@ -73,7 +74,7 @@ def cmd_find(args, records):
     print_table(found)
 
 
-def cmd_delete(args):
+def cmd_delete(args, user_id):
     if len(args) < 1:
         print("для delete потрібен id фільму, наприклад: delete 5")
         return
@@ -82,7 +83,7 @@ def cmd_delete(args):
     except ValueError:
         print("помилка: id має бути цілим числом, а не", repr(args[0]))
         return
-    if storage.delete(movie_id):
+    if storage.delete(movie_id, user_id):
         print("видалено фільм з id", movie_id)
     else:
         print("фільм з id", movie_id, "не знайдено")
@@ -109,16 +110,19 @@ def cmd_report(records):
 
 
 def main():
-    if len(sys.argv) < 2:
+    if len(sys.argv) < 3:
         print(USAGE)
         return
-    command = sys.argv[1]
-    args = sys.argv[2:]
+    login, command, args = sys.argv[1], sys.argv[2], sys.argv[3:]
     storage.init()
-    records = storage.load()
+    user = storage.get_user_by_login(login)
+    if user is None:
+        print("немає користувача з логіном", repr(login))
+        return
+    records = storage.load(user["id"])
 
     if command == "add":
-        cmd_add(args, records)
+        cmd_add(args, user["id"])
     elif command == "list":
         print_table(records)
     elif command == "find":
@@ -126,7 +130,7 @@ def main():
     elif command == "report":
         cmd_report(records)
     elif command == "delete":
-        cmd_delete(args)
+        cmd_delete(args, user["id"])
     else:
         print("невідома команда:", command)
         print(USAGE)

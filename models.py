@@ -6,10 +6,11 @@
 
 
 class Movie:
-    """Один фільм: назва, рік, статус, оцінка і дата."""
+    """Один фільм: назва, рік, статус, оцінка, дата і власник."""
 
-    def __init__(self, title, year, status, rating=0, date="", movie_id=None):
+    def __init__(self, title, year, status, rating=0, date="", movie_id=None, user_id=None):
         self.id = movie_id
+        self.user_id = user_id       # чий це фільм (з лабораторної 12)
         self.title = title
         self.year = int(year)        # тут, і тільки тут, рядок стає числом
         self.status = status
@@ -24,8 +25,9 @@ class Movie:
     @staticmethod
     def from_row(row):
         """З рядка бази (sqlite3.Row) в об'єкт Movie."""
+        user_id = row["user_id"] if "user_id" in row.keys() else None
         return Movie(row["title"], row["year"], row["status"],
-                     row["rating"], row["date"], row["id"])
+                     row["rating"], row["date"], row["id"], user_id)
 
     def is_rated(self):
         """Чи має фільм оцінку (0 означає «ще не оцінено»)."""
