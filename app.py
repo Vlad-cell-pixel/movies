@@ -7,11 +7,13 @@
     GET    /movies?status=...      фільтр за статусом (також title, year, rating)
     POST   /movies                 додати фільм (JSON у тілі запиту)
     GET    /report                 звіт
+    GET    /report/statuses        звіт за статусами (JOIN двох таблиць)
 
 Адміністративні маршрути (потрібен заголовок X-Admin-Token, доступ лише через VPN):
     DELETE /admin/movies/<id>      видалити фільм за id
     GET    /admin/export           усі фільми одним списком (резервна копія)
     POST   /admin/import           додати багато фільмів зі списку JSON
+    GET    /admin/log?limit=50     журнал дій (додавання і видалення)
 """
 
 import os
@@ -52,7 +54,7 @@ def index():
     return jsonify({
         "service": "Фільми",
         "routes": ["GET /movies", "GET /movies?status=...", "POST /movies",
-                   "GET /report"],
+                   "GET /report", "GET /report/statuses"],
     })
 
 
@@ -72,11 +74,11 @@ def list_movies():
                 movies = logic.find(movies, field, value)
             except ValueError as error:
                 return jsonify({"error": str(error)}), 400
-    return jsonify(movies)
+    return jsonify([m.to_dict() for m in movies])
 
 
 def movie_from_json(data):
-    """Перевіряє один фільм з JSON і повертає словник. Помилка -> ValueError."""
+    """Перевіряє один фільм з JSON і повертає об'єкт Movie. Помилка -> ValueError."""
     if not isinstance(data, dict):
         raise ValueError("очікується JSON-об'єкт")
     for field in ("title", "year", "status"):
@@ -101,8 +103,8 @@ def add_movie():
         movie = movie_from_json(data)
     except ValueError as error:
         return jsonify({"error": str(error)}), 400
-    movie["id"] = storage.add(movie)
-    return jsonify(movie), 201
+    movie.id = storage.add(movie)
+    return jsonify(movie.to_dict()), 201
 
 
 # ---------- Адміністративні маршрути ----------
@@ -132,7 +134,7 @@ def delete_movie(movie_id):
 def export_movies():
     """Віддає всі фільми одним списком."""
     require_admin()
-    return jsonify(storage.load())
+    return jsonify([m.to_dict() for m in storage.load()])
 
 
 @app.post("/admin/import")
@@ -153,6 +155,19 @@ def import_movies():
     return jsonify({"imported": len(movies)}), 201
 
 
+@app.get("/admin/log")
+def show_log():
+    """Останні записи журналу дій. ?limit= від 1 до 500, за замовчуванням 50."""
+    require_admin()
+    try:
+        limit = int(request.args.get("limit", 50))
+    except ValueError:
+        return jsonify({"error": "limit має бути числом"}), 400
+    if limit < 1 or limit > 500:
+        return jsonify({"error": "limit має бути від 1 до 500"}), 400
+    return jsonify(storage.read_log(limit))
+
+
 @app.get("/report")
 def report():
     """Звіт: кількість, статуси, середня оцінка, топ-3."""
@@ -161,8 +176,14 @@ def report():
         "total": len(movies),
         "by_status": logic.count_by_status(movies),
         "average_rating": logic.average_rating(movies),
-        "top_rated": logic.top_rated(movies, 3),
+        "top_rated": [m.to_dict() for m in logic.top_rated(movies, 3)],
     })
+
+
+@app.get("/report/statuses")
+def report_statuses():
+    """Звіт через JOIN: кількість фільмів і середня оцінка для кожного статусу."""
+    return jsonify(storage.status_report())
 
 
 # Невідома адреса, заборонено або неправильний метод: теж JSON, а не HTML-сторінка.
