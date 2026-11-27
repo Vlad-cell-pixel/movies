@@ -1,0 +1,13 @@
+# Що НЕ потрапляє в образ: секрети, база, віртуальне оточення, зайве
+venv
+.venv
+.git
+.github
+.env
+*.db
+data
+__pycache__
+.pytest_cache
+tests
+frontend
+deploy

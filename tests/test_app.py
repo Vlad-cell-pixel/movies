@@ -218,3 +218,17 @@ def test_admin_export_and_import(client, admin):
     exported = admin.get("/admin/export").get_json()
     assert [(m["title"], m["user_id"]) for m in exported] == [("Матриця", 1), ("Дюна", 2), ("Олдбой", 2)]
     assert len(client.get("/movies").get_json()) == 1            # імпорт пішов адміну, не vlad
+
+
+# ---------- моніторинг ----------
+
+def test_health_ok_without_login(app_module):
+    c = app_module.app.test_client()
+    r = c.get("/health")
+    assert r.status_code == 200 and r.get_json() == {"status": "ok"}
+
+
+def test_health_reports_broken_db(app_module, tmp_path, monkeypatch):
+    monkeypatch.setenv("DB_PATH", str(tmp_path))          # папка замість файлу: база не відкривається
+    r = app_module.app.test_client().get("/health")
+    assert r.status_code == 503 and r.get_json() == {"status": "db_error"}

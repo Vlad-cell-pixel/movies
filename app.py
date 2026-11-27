@@ -2,6 +2,9 @@
 
 Запуск:  SECRET_KEY=будь-що python3 app.py   →   http://127.0.0.1:5000/
 
+Перевірка для монітора:
+    GET    /health                 {"status": "ok"} або 503, якщо база не відповідає
+
 Вхід:
     POST   /register               {"login", "password"} → створити акаунт і увійти
     POST   /login                  {"login", "password"} → увійти (сервер ставить cookie сесії)
@@ -75,10 +78,22 @@ def index():
     """Головна сторінка: коротка підказка, які є маршрути."""
     return jsonify({
         "service": "Фільми",
-        "routes": ["POST /register", "POST /login", "POST /logout", "GET /me",
+        "routes": ["GET /health", "POST /register", "POST /login", "POST /logout", "GET /me",
                    "GET /movies", "POST /movies", "DELETE /movies/<id>",
                    "GET /report", "GET /report/statuses"],
     })
+
+
+@app.get("/health")
+def health():
+    """Чи живий сервіс і чи відповідає база. Без входу і без даних: це опитує монітор."""
+    try:
+        conn = storage.connect()
+        conn.execute("SELECT 1").fetchone()
+        conn.close()
+        return jsonify({"status": "ok"})
+    except Exception:
+        return jsonify({"status": "db_error"}), 503
 
 
 # ---------- Користувачі і сесії ----------

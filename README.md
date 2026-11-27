@@ -260,3 +260,36 @@ curl -c jar.txt -X POST https://api.vhritsun.pp.ua/login -H "Content-Type: appli
 curl -b jar.txt https://api.vhritsun.pp.ua/movies     # свої фільми
 curl https://api.vhritsun.pp.ua/movies                # без cookie: 401
 ```
+
+## Лабораторна 13: Docker, автоматичні тести і деплой, моніторинг
+
+### Розгортання (актуальне, з лабораторної 13)
+
+Сервіс працює в Docker-контейнері, nginx і Cloudflare перед ним не змінилися:
+
+```
+браузер → Cloudflare → nginx (443) → 127.0.0.1:8000 → контейнер api (gunicorn + Flask) → ~/movies/data/data.db
+```
+
+- `Dockerfile` — образ: Python 3.12 + бібліотеки з `requirements.txt` + код.
+- `.dockerignore` — у образ не потрапляють `.env`, база, `venv`, `.git`, тести, фронтенд.
+- `compose.yaml` — запуск: порт лише `127.0.0.1:8000` (ззовні не видно), `SECRET_KEY` з `.env`, база в томі `./data:/data`.
+
+Команди на сервері (у `~/movies`):
+
+```
+docker compose up -d --build      # зібрати і запустити
+docker compose ps                 # чи працює
+docker compose logs -f api        # логи (вихід: Ctrl+C)
+docker compose down               # зупинити і прибрати контейнер (база в ./data лишається)
+```
+
+Бекап (cron, щодня 03:00 UTC) тепер копіює `~/movies/data/data.db`.
+
+**Автоматичний деплой (GitHub Actions, `.github/workflows/ci.yml`):** кожен `git push` у `master` запускає `pytest`; лише якщо тести зелені, другий етап заходить на сервер по SSH окремим ключем деплою (секрети `SSH_HOST`, `SSH_USER`, `SSH_KEY` у GitHub), робить `git pull`, `docker compose up -d --build` і перевіряє `/health`. Червоний тест блокує деплой.
+
+**Моніторинг:** `GET /health` → `{"status": "ok"}` або `503 {"status": "db_error"}`. UptimeRobot перевіряє `https://api.vhritsun.pp.ua/health` кожні 5 хвилин і надсилає лист, коли сервіс падає і коли відновлюється.
+
+### Застаріле (лабораторні 8–12)
+
+~~systemd-юніт `deploy/movies.service` з gunicorn у `venv`~~ — вимкнений (`sudo systemctl disable --now movies`), файл лишається в репозиторії як історія. Ручний деплой `ssh` → `git pull` → `systemctl restart` більше не потрібен.
