@@ -70,7 +70,3 @@ def test_average_rating():
 def test_top_rated():
     assert [m.title for m in logic.top_rated(MOVIES, 2)] == ["Матриця", "Інтерстеллар"]
     assert len(logic.top_rated(MOVIES, 10)) == 3
-
-
-def test_navmysno_zlamanyi():
-    assert 1 == 2
