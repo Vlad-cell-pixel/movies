@@ -29,8 +29,8 @@ USAGE = """використання:
 
 def format_movie(r):
     """Один фільм у вигляді рядка таблиці."""
-    rating = "-" if r["rating"] == 0 else f"{r['rating']}/10"
-    return f"{r['id']:>4}  {r['title'][:30]:<30} {r['year']:>4}  {r['status']:<12} {rating:>5}  {r['date']}"
+    rating = f"{r.rating}/10" if r.is_rated() else "-"
+    return f"{r.id:>4}  {r.title[:30]:<30} {r.year:>4}  {r.status:<12} {rating:>5}  {r.date}"
 
 
 def print_table(records):
@@ -57,7 +57,7 @@ def cmd_add(args, records):
     except ValueError as error:
         print("помилка:", error)
         return
-    movie["id"] = storage.add(movie)
+    movie.id = storage.add(movie)
     print("додано:", format_movie(movie))
 
 
@@ -105,7 +105,7 @@ def cmd_report(records):
     if top:
         print("\nНайкращі фільми:")
         for i, r in enumerate(top, start=1):
-            print(f"  {i}. {r['title']} ({r['year']}) - {r['rating']}/10")
+            print(f"  {i}. {r.title} ({r.year}) - {r.rating}/10")
 
 
 def main():

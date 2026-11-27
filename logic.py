@@ -6,12 +6,14 @@
 
 from datetime import date
 
+from models import Movie
+
 STATUSES = ["переглянуто", "дивлюсь", "заплановано"]
 MIN_YEAR = 1888  # рік першого фільму в історії
 
 
 def make_record(title, year, status, rating="0", date_str=""):
-    """Перевіряє введені дані й повертає словник-фільм.
+    """Перевіряє введені дані й повертає об'єкт Movie.
 
     Усі аргументи можуть бути рядками (так вони приходять з терміналу).
     Якщо щось не так, кидає ValueError із зрозумілим повідомленням.
@@ -50,8 +52,7 @@ def make_record(title, year, status, rating="0", date_str=""):
         except ValueError:
             raise ValueError(f"дата має бути у форматі РРРР-ММ-ДД, а не '{date_str}'")
 
-    return {"title": title, "year": year, "status": status,
-            "rating": rating, "date": date_str}
+    return Movie(title, year, status, rating, date_str)
 
 
 def find(records, field, value):
@@ -65,21 +66,21 @@ def find(records, field, value):
     """
     if field == "title":
         needle = value.lower()
-        return [r for r in records if needle in r["title"].lower()]
+        return [r for r in records if needle in r.title.lower()]
     if field == "status":
-        return [r for r in records if r["status"] == value.lower()]
+        return [r for r in records if r.status == value.lower()]
     if field == "year":
         try:
             year = int(value)
         except ValueError:
             raise ValueError(f"рік має бути числом, а не '{value}'")
-        return [r for r in records if r["year"] == year]
+        return [r for r in records if r.year == year]
     if field == "rating":
         try:
             minimum = int(value)
         except ValueError:
             raise ValueError(f"оцінка має бути числом, а не '{value}'")
-        return [r for r in records if r["rating"] >= minimum]
+        return [r for r in records if r.rating >= minimum]
     raise ValueError(f"невідоме поле '{field}'. Можна: title, status, year, rating")
 
 
@@ -87,7 +88,7 @@ def count_by_status(records):
     """Повертає словник {статус: кількість фільмів}."""
     counts = {}
     for r in records:
-        status = r["status"]
+        status = r.status
         if status not in counts:
             counts[status] = 0
         counts[status] = counts[status] + 1
@@ -99,7 +100,7 @@ def average_rating(records):
 
     Якщо оцінених фільмів немає, повертає None (а не ділить на нуль).
     """
-    rated = [r["rating"] for r in records if r["rating"] > 0]
+    rated = [r.rating for r in records if r.is_rated()]
     if len(rated) == 0:
         return None
     return round(sum(rated) / len(rated), 2)
@@ -107,6 +108,6 @@ def average_rating(records):
 
 def top_rated(records, n=3):
     """Повертає n фільмів з найвищою оцінкою (неоцінені не враховуються)."""
-    rated = [r for r in records if r["rating"] > 0]
-    rated.sort(key=lambda r: r["rating"], reverse=True)
+    rated = [r for r in records if r.is_rated()]
+    rated.sort(key=lambda r: r.rating, reverse=True)
     return rated[:n]
