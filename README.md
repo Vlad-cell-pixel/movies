@@ -233,4 +233,30 @@ nginx: за доменом `/admin/` закрито (`deny all`), окремий
 | підбір пароля ssh | `fail2ban-client status sshd` | закрито | fail2ban |
 
 Відкрите і прийнятне: порт 22 доступний з інтернету (потрібен для керування сервером),
-але вхід лише за ключем, а підбір блокує fail2ban.
+але вхід лише за ключем, а підбір блокує fail2ban.## Лабораторна 11: класи, друга таблиця, журнал дій, pytest
+
+- `models.py`: клас `Movie`. Усередині програми фільм — об'єкт, словник лише для JSON (`to_dict`) і бази (`from_row`).
+- Друга таблиця `statuses`; у `movies` зберігається `status_id REFERENCES statuses(id)`, перевірка зв'язків увімкнена (`PRAGMA foreign_keys = ON`).
+- Звіт через JOIN: `GET /report/statuses`.
+- Журнал дій `audit_log`: кожне додавання і видалення з часом; перегляд `GET /admin/log`.
+- `migrate.py`: перенесення старої бази без втрат (id зберігаються, кількість перевіряється, все в одній транзакції).
+- Тести: `pytest -v` (папка `tests/`, окремо логіка, база, міграція, маршрути; кожен тест на тимчасовій базі).
+
+## Лабораторна 12: користувачі, вхід і права
+
+- Таблиця `users`: логін, **хеш** пароля (`werkzeug.security`, scrypt), `is_admin`. Паролів відкритим текстом у базі немає.
+- `POST /register`, `POST /login`, `POST /logout`, `GET /me`. Сесія — підписаний cookie (`SECRET_KEY` у `.env`), `Secure`, `HttpOnly`, `SameSite=Lax`, домен `.vhritsun.pp.ua`.
+- На неправильний пароль і неіснуючий логін — однакова відповідь 401, щоб не підказувати, які логіни є.
+- Кожен фільм має `user_id`. Усі запити до бази мають `WHERE user_id = ?`: користувач бачить і видаляє лише своє. Чужий фільм → 404 (як неіснуючий).
+- Адміністратор: `is_admin = 1`, призначається лише вручну через `sqlite3` на сервері. Статичний `ADMIN_TOKEN` видалено з коду і `.env`. Обмеження nginx на `/admin/` (лише Tailscale) лишилось: два шари захисту.
+- У журналі дій є `user_id` (хто зробив дію).
+- Фронтенд: форма входу і реєстрації, кнопка виходу, видалення своїх фільмів; усі запити з `credentials: "include"`, CORS з `supports_credentials=True`.
+- Захист від підбору пароля: правило rate limiting у Cloudflare охоплює також `/login` і `/register`.
+
+Перевірка через curl:
+
+```
+curl -c jar.txt -X POST https://api.vhritsun.pp.ua/login -H "Content-Type: application/json" -d '{"login": "...", "password": "..."}'
+curl -b jar.txt https://api.vhritsun.pp.ua/movies     # свої фільми
+curl https://api.vhritsun.pp.ua/movies                # без cookie: 401
+```
