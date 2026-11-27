@@ -23,10 +23,39 @@
     .movie-title { font-weight: 600; }
     .meta { color: #777; font-size: .9rem; }
     .rating { font-weight: 600; white-space: nowrap; }
+    .right { display: flex; align-items: center; gap: .6rem; }
+    .delete { border: none; background: none; color: #b91c1c; font-size: 1.1rem; cursor: pointer; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; }
+    .topbar button { padding: .3rem .8rem; border: 1px solid #ccc; border-radius: 6px; background: #fff; cursor: pointer; }
+    #auth-form { grid-template-columns: 1fr 1fr; }
+    #auth-form button { grid-column: auto; }
+    #auth-form .second { background: #fff; color: #2563eb; border: 1px solid #2563eb; }
+    [hidden] { display: none !important; }
   </style>
 </head>
 <body>
-  <h1>🎬 Мої фільми</h1>
+  <div class="topbar">
+    <h1>🎬 Мої фільми</h1>
+    <div id="user-box" hidden>
+      <span id="user-name"></span>
+      <button id="logout">Вийти</button>
+    </div>
+  </div>
+
+  <!-- Блок входу: видно, поки користувач не увійшов -->
+  <section id="auth" hidden>
+    <p>Увійдіть або створіть акаунт, щоб бачити свій список фільмів.</p>
+    <form id="auth-form">
+      <input id="login" placeholder="логін (від 3 символів)" autocomplete="username" required>
+      <input id="password" type="password" placeholder="пароль (від 8 символів)" autocomplete="current-password" required>
+      <button id="login-btn">Увійти</button>
+      <button id="register-btn" class="second" type="button">Зареєструватися</button>
+    </form>
+    <p id="auth-msg"></p>
+  </section>
+
+  <!-- Основна частина: видно лише після входу -->
+  <section id="app" hidden>
   <p class="stats" id="stats"></p>
 
   <form id="form">
@@ -49,35 +78,102 @@
     <button data-filter="заплановано">заплановано</button>
   </div>
   <ul id="list"></ul>
+  </section>
 
   <script>
     // Адреса нашого API (вебсервісу з лабораторних 7–8)
     const API = "https://api.vhritsun.pp.ua";
     let currentFilter = "";
 
-    // Показати повідомлення під формою
-    function showMessage(text, isError) {
-      const msg = document.getElementById("status-msg");
+    // Усі запити до API йдуть через цю функцію.
+    // credentials: "include" — браузер додає cookie сесії (без цього сервер не знає, хто ви, і дає 401).
+    async function api(path, options = {}) {
+      const response = await fetch(API + path, { credentials: "include", ...options });
+      if (response.status === 401 && path !== "/login") {
+        showLogin();                       // сесія закінчилась або ще не входили
+        throw new Error("потрібно увійти");
+      }
+      return response;
+    }
+
+    function sendJson(method, body) {
+      return { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+    }
+
+    // Показати повідомлення (зелене або червоне)
+    function showMessage(id, text, isError) {
+      const msg = document.getElementById(id);
       msg.textContent = text;
       msg.className = isError ? "error" : "ok";
     }
 
+    // ---------- Вхід / вихід ----------
+
+    function showLogin() {
+      document.getElementById("auth").hidden = false;
+      document.getElementById("app").hidden = true;
+      document.getElementById("user-box").hidden = true;
+    }
+
+    function showApp(user) {
+      document.getElementById("auth").hidden = true;
+      document.getElementById("app").hidden = false;
+      document.getElementById("user-box").hidden = false;
+      document.getElementById("user-name").textContent = "👤 " + user.login;   // textContent: захист від XSS
+      refresh();
+    }
+
+    // Вхід або реєстрація: однакова форма, різна адреса
+    async function authenticate(path) {
+      const body = {
+        login: document.getElementById("login").value,
+        password: document.getElementById("password").value,
+      };
+      try {
+        const response = await api(path, sendJson("POST", body));
+        const result = await response.json();
+        if (response.ok) {
+          document.getElementById("auth-form").reset();
+          showMessage("auth-msg", "", false);
+          showApp(result);
+        } else {
+          showMessage("auth-msg", result.error, true);
+        }
+      } catch (error) {
+        showMessage("auth-msg", "не вдалося зв'язатися з сервером", true);
+      }
+    }
+
+    document.getElementById("auth-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      authenticate("/login");
+    });
+    document.getElementById("register-btn").addEventListener("click", () => {
+      if (document.getElementById("auth-form").reportValidity()) authenticate("/register");
+    });
+    document.getElementById("logout").addEventListener("click", async () => {
+      await fetch(API + "/logout", { method: "POST", credentials: "include" });
+      showLogin();
+    });
+
+    // ---------- Фільми ----------
+
     // Завантажити звіт (скільки фільмів, середня оцінка)
     async function loadStats() {
-      const response = await fetch(API + "/report");
+      const response = await api("/report");
       const report = await response.json();
       const avg = report.average_rating === null ? "—" : report.average_rating;
       document.getElementById("stats").textContent =
         `Усього: ${report.total} · середня оцінка: ${avg}`;
     }
 
-    // Завантажити список фільмів (з фільтром за статусом, якщо вибрано)
+    // Завантажити свій список фільмів (з фільтром за статусом, якщо вибрано)
     async function loadMovies() {
-      let url = API + "/movies";
+      let path = "/movies";
       if (currentFilter) {
-        url += "?status=" + encodeURIComponent(currentFilter);
+        path += "?status=" + encodeURIComponent(currentFilter);
       }
-      const response = await fetch(url);
+      const response = await api(path);
       const movies = await response.json();
 
       const list = document.getElementById("list");
@@ -95,12 +191,21 @@
         left.appendChild(title);
         left.appendChild(meta);
 
-        const rating = document.createElement("div");
+        const right = document.createElement("div");
+        right.className = "right";
+        const rating = document.createElement("span");
         rating.className = "rating";
         rating.textContent = movie.rating > 0 ? `★ ${movie.rating}/10` : "—";
+        const del = document.createElement("button");
+        del.className = "delete";
+        del.title = "видалити";
+        del.textContent = "✕";
+        del.addEventListener("click", () => deleteMovie(movie));
+        right.appendChild(rating);
+        right.appendChild(del);
 
         li.appendChild(left);
-        li.appendChild(rating);
+        li.appendChild(right);
         list.appendChild(li);
       }
       if (movies.length === 0) {
@@ -110,12 +215,29 @@
       }
     }
 
+    // Видалити свій фільм: DELETE /movies/<id>
+    async function deleteMovie(movie) {
+      try {
+        const response = await api("/movies/" + movie.id, { method: "DELETE" });
+        if (response.ok) {
+          showMessage("status-msg", "видалено: " + movie.title, false);
+        } else {
+          showMessage("status-msg", "не вдалося видалити", true);
+        }
+        refresh();
+      } catch (error) {
+        // 401 уже оброблено в api()
+      }
+    }
+
     // Оновити все на сторінці
     async function refresh() {
       try {
         await Promise.all([loadMovies(), loadStats()]);
       } catch (error) {
-        showMessage("не вдалося зв'язатися з сервером", true);
+        if (error.message !== "потрібно увійти") {
+          showMessage("status-msg", "не вдалося зв'язатися з сервером", true);
+        }
       }
     }
 
@@ -129,22 +251,20 @@
         rating: document.getElementById("rating").value || 0,
       };
       try {
-        const response = await fetch(API + "/movies", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
+        const response = await api("/movies", sendJson("POST", body));
         const result = await response.json();
         if (response.ok) {
-          showMessage("додано: " + result.title, false);
+          showMessage("status-msg", "додано: " + result.title, false);
           document.getElementById("form").reset();
         } else {
-          showMessage("помилка: " + result.error, true);
+          showMessage("status-msg", "помилка: " + result.error, true);
         }
+        refresh();
       } catch (error) {
-        showMessage("не вдалося зв'язатися з сервером", true);
+        if (error.message !== "потрібно увійти") {
+          showMessage("status-msg", "не вдалося зв'язатися з сервером", true);
+        }
       }
-      refresh();
     });
 
     // Кнопки-фільтри за статусом
@@ -153,11 +273,24 @@
         document.querySelectorAll(".filters button").forEach(b => b.classList.remove("active"));
         button.classList.add("active");
         currentFilter = button.dataset.filter;
-        loadMovies();
+        loadMovies().catch(() => {});
       });
     }
 
-    refresh();
+    // При відкритті сторінки: якщо вже увійшли (cookie живий) — показати фільми, інакше форму входу
+    async function start() {
+      try {
+        const response = await api("/me");
+        showApp(await response.json());
+      } catch (error) {
+        if (error.message !== "потрібно увійти") {
+          showLogin();
+          showMessage("auth-msg", "не вдалося зв'язатися з сервером", true);
+        }
+      }
+    }
+
+    start();
   </script>
 </body>
 </html>

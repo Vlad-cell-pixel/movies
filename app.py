@@ -1,35 +1,57 @@
-"""Вебсервіс списку фільмів на Flask.
+"""Вебсервіс списку фільмів на Flask (з лабораторної 12 — з користувачами).
 
-Запуск:  python3 app.py   →   http://127.0.0.1:5000/movies
+Запуск:  SECRET_KEY=будь-що python3 app.py   →   http://127.0.0.1:5000/
 
-Маршрути:
-    GET    /movies                 усі фільми (JSON)
-    GET    /movies?status=...      фільтр за статусом (також title, year, rating)
-    POST   /movies                 додати фільм (JSON у тілі запиту)
+Вхід:
+    POST   /register               {"login", "password"} → створити акаунт і увійти
+    POST   /login                  {"login", "password"} → увійти (сервер ставить cookie сесії)
+    POST   /logout                 вийти
+    GET    /me                     хто я
+
+Свої фільми (без входу → 401):
+    GET    /movies                 свої фільми (JSON), фільтри ?status= ?title= ?year= ?rating=
+    POST   /movies                 додати фільм
+    DELETE /movies/<id>            видалити свій фільм (чужий → 404)
     GET    /report                 звіт
-    GET    /report/statuses        звіт за статусами (JOIN двох таблиць)
+    GET    /report/statuses        звіт за статусами (JOIN)
 
-Адміністративні маршрути (потрібен заголовок X-Admin-Token, доступ лише через VPN):
-    DELETE /admin/movies/<id>      видалити фільм за id
-    GET    /admin/export           усі фільми одним списком (резервна копія)
-    POST   /admin/import           додати багато фільмів зі списку JSON
-    GET    /admin/log?limit=50     журнал дій (додавання і видалення)
+Адміністратор (is_admin = 1 у базі, доступ лише через VPN):
+    DELETE /admin/movies/<id>      видалити будь-який фільм
+    GET    /admin/export           усі фільми всіх користувачів
+    POST   /admin/import           додати багато фільмів собі
+    GET    /admin/users            користувачі (без паролів)
+    GET    /admin/log?limit=50     журнал дій
 """
 
 import os
-import secrets
+import sqlite3
 
-from flask import Flask, request, jsonify, abort
+from flask import Flask, request, jsonify, abort, session
 from flask_cors import CORS
+from werkzeug.security import generate_password_hash, check_password_hash
 
 import logic
 import storage
 
 app = Flask(__name__)
-CORS(app, origins=["https://vhritsun.pp.ua"])
-app.json.ensure_ascii = False  # щоб кирилиця в JSON була читабельною, а не ф...
+# supports_credentials=True: браузеру дозволено надсилати cookie сесії з сайту на API
+CORS(app, origins=["https://vhritsun.pp.ua"], supports_credentials=True)
+app.json.ensure_ascii = False  # щоб кирилиця в JSON була читабельною, а не \u0444...
 app.json.mimetype = "application/json; charset=utf-8"
+
+# Ключ, яким сервер підписує cookie сесії. Лежить у .env, НЕ в коді.
+# Якщо його не задано, сервер навмисно не запуститься (KeyError) — це краще, ніж працювати без захисту.
+app.config["SECRET_KEY"] = os.environ["SECRET_KEY"]
+app.config["SESSION_COOKIE_SECURE"] = True        # cookie лише через https
+app.config["SESSION_COOKIE_HTTPONLY"] = True      # JavaScript на сторінці не може прочитати cookie
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"     # чужі сайти не можуть надсилати запити з вашим cookie
+app.config["SESSION_COOKIE_DOMAIN"] = ".vhritsun.pp.ua"  # спільний для сайту і api.
+
 storage.init()
+
+# Хеш-«пустушка»: перевіряється, коли логіна не існує, щоб відповідь тривала стільки ж,
+# скільки й для справжнього логіна (інакше за часом можна вгадати, які логіни є).
+DUMMY_HASH = generate_password_hash("dummy-password")
 
 
 def get_arg(name):
@@ -53,20 +75,99 @@ def index():
     """Головна сторінка: коротка підказка, які є маршрути."""
     return jsonify({
         "service": "Фільми",
-        "routes": ["GET /movies", "GET /movies?status=...", "POST /movies",
+        "routes": ["POST /register", "POST /login", "POST /logout", "GET /me",
+                   "GET /movies", "POST /movies", "DELETE /movies/<id>",
                    "GET /report", "GET /report/statuses"],
     })
 
 
+# ---------- Користувачі і сесії ----------
+
+def read_credentials():
+    """Логін і пароль з JSON. Не рядки (null, числа) → порожні, далі їх відкине перевірка."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
+    login, password = data.get("login"), data.get("password")
+    login = login.strip() if isinstance(login, str) else ""
+    password = password if isinstance(password, str) else ""
+    return login, password
+
+
+@app.post("/register")
+def register():
+    """Реєстрація: {"login", "password"}. Пароль зберігається лише як хеш."""
+    login, password = read_credentials()
+    if len(login) < 3 or len(login) > 50 or len(password) < 8:
+        return jsonify({"error": "логін від 3 до 50 символів, пароль від 8"}), 400
+    try:
+        user_id = storage.add_user(login, generate_password_hash(password))
+    except sqlite3.IntegrityError:
+        return jsonify({"error": "логін зайнятий"}), 409
+    session.clear()
+    session["user_id"] = user_id
+    return jsonify({"id": user_id, "login": login}), 201
+
+
+@app.post("/login")
+def login():
+    """Вхід: {"login", "password"}. Після успіху сервер «пам'ятає» користувача через cookie."""
+    login, password = read_credentials()
+    user = storage.get_user_by_login(login)
+    if user is None:
+        check_password_hash(DUMMY_HASH, password)  # та сама робота, що й для справжнього логіна
+        return jsonify({"error": "неправильний логін або пароль"}), 401
+    if not check_password_hash(user["password_hash"], password):
+        return jsonify({"error": "неправильний логін або пароль"}), 401
+    session.clear()
+    session["user_id"] = user["id"]
+    return jsonify({"id": user["id"], "login": user["login"]})
+
+
+@app.post("/logout")
+def logout():
+    session.clear()
+    return jsonify({"ok": True})
+
+
+def current_user():
+    """Повертає користувача поточної сесії або зупиняє запит з 401."""
+    user_id = session.get("user_id")
+    if user_id is None:
+        abort(401)
+    user = storage.get_user(user_id)
+    if user is None:          # користувача видалили, а cookie лишився
+        session.clear()
+        abort(401)
+    return user
+
+
+def require_admin():
+    """Пускає далі лише користувача з is_admin = 1."""
+    user = current_user()
+    if not user["is_admin"]:
+        abort(403)
+    return user
+
+
+@app.get("/me")
+def me():
+    """Хто я? Сторінка викликає це при відкритті, щоб знати, чи показувати форму входу."""
+    user = current_user()
+    return jsonify({"id": user["id"], "login": user["login"], "is_admin": bool(user["is_admin"])})
+
+
+# ---------- Фільми поточного користувача ----------
+
 @app.get("/movies")
 def list_movies():
-    """Усі фільми або відфільтровані через ?status= / ?title= / ?year= / ?rating=."""
+    """Свої фільми або відфільтровані через ?status= / ?title= / ?year= / ?rating=."""
+    user = current_user()
     status = get_arg("status")  # None, якщо в адресі немає ?status=
     if status is not None and status.lower() not in logic.STATUSES:
         return jsonify({"error": "статус має бути одним із: " + ", ".join(logic.STATUSES)}), 400
-    movies = storage.load(status.lower() if status else None)
+    movies = storage.load(user["id"], status.lower() if status else None)
 
-    # Інші фільтри робить logic.find, той самий, що й у лабораторній 6.
     for field in ("title", "year", "rating"):
         value = get_arg(field)
         if value is not None:
@@ -95,52 +196,70 @@ def movie_from_json(data):
 
 @app.post("/movies")
 def add_movie():
-    """Додає фільм. Очікує JSON: {"title", "year", "status", "rating"?, "date"?}."""
-    data = request.get_json(silent=True)  # silent=True: None замість падіння
+    """Додає фільм поточному користувачу. JSON: {"title", "year", "status", "rating"?, "date"?}."""
+    user = current_user()
+    data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({"error": "очікується JSON-об'єкт у тілі запиту"}), 400
     try:
         movie = movie_from_json(data)
     except ValueError as error:
         return jsonify({"error": str(error)}), 400
-    movie.id = storage.add(movie)
+    movie.id = storage.add(movie, user["id"])
     return jsonify(movie.to_dict()), 201
 
 
-# ---------- Адміністративні маршрути ----------
+@app.delete("/movies/<int:movie_id>")
+def delete_own_movie(movie_id):
+    """Видаляє СВІЙ фільм. Чужий або неіснуючий → 404 (не підтверджуємо, що він є)."""
+    user = current_user()
+    if storage.delete(movie_id, user["id"]):
+        return jsonify({"deleted": movie_id})
+    return jsonify({"error": f"фільм з id {movie_id} не знайдено"}), 404
 
-def require_admin():
-    """Пускає далі лише запит з правильним заголовком X-Admin-Token.
 
-    Токен береться з оточення (файл .env на сервері), а не з коду.
-    Якщо токен на сервері не налаштований, адмінка закрита для всіх.
-    """
-    expected = os.environ.get("ADMIN_TOKEN")
-    given = request.headers.get("X-Admin-Token", "")
-    if not expected or not secrets.compare_digest(given, expected):
-        abort(403)
+@app.get("/report")
+def report():
+    """Звіт по своїх фільмах: кількість, статуси, середня оцінка, топ-3."""
+    user = current_user()
+    movies = storage.load(user["id"])
+    return jsonify({
+        "total": len(movies),
+        "by_status": logic.count_by_status(movies),
+        "average_rating": logic.average_rating(movies),
+        "top_rated": [m.to_dict() for m in logic.top_rated(movies, 3)],
+    })
 
+
+@app.get("/report/statuses")
+def report_statuses():
+    """Звіт через JOIN: кількість своїх фільмів і середня оцінка для кожного статусу."""
+    user = current_user()
+    return jsonify(storage.status_report(user["id"]))
+
+
+# ---------- Адміністративні маршрути (лише is_admin = 1, і ще nginx пускає лише з VPN) ----------
 
 @app.delete("/admin/movies/<int:movie_id>")
-def delete_movie(movie_id):
-    """Видаляє фільм за id."""
-    require_admin()
-    if storage.delete(movie_id):
+def admin_delete_movie(movie_id):
+    """Видаляє будь-який фільм за id."""
+    admin = require_admin()
+    if storage.admin_delete(movie_id, admin["id"]):
         return jsonify({"deleted": movie_id})
     return jsonify({"error": f"фільм з id {movie_id} не знайдено"}), 404
 
 
 @app.get("/admin/export")
 def export_movies():
-    """Віддає всі фільми одним списком."""
+    """Усі фільми всіх користувачів одним списком (з user_id власника)."""
     require_admin()
-    return jsonify([m.to_dict() for m in storage.load()])
+    return jsonify([{**m.to_dict(), "user_id": m.user_id} for m in storage.load_all()])
 
 
 @app.post("/admin/import")
 def import_movies():
-    """Додає список фільмів. Спершу перевіряє всі, і лише потім додає (все або нічого)."""
-    require_admin()
+    """Додає список фільмів адміністратору. Спершу перевіряє всі (все або нічого)."""
+    admin = require_admin()
     data = request.get_json(silent=True)
     if not isinstance(data, list):
         return jsonify({"error": "очікується JSON-список фільмів"}), 400
@@ -151,8 +270,15 @@ def import_movies():
         except ValueError as error:
             return jsonify({"error": f"фільм №{number}: {error}"}), 400
     for movie in movies:
-        storage.add(movie)
+        storage.add(movie, admin["id"])
     return jsonify({"imported": len(movies)}), 201
+
+
+@app.get("/admin/users")
+def admin_users():
+    """Список користувачів (без хешів паролів) і скільки в кого фільмів."""
+    require_admin()
+    return jsonify(storage.list_users())
 
 
 @app.get("/admin/log")
@@ -168,25 +294,12 @@ def show_log():
     return jsonify(storage.read_log(limit))
 
 
-@app.get("/report")
-def report():
-    """Звіт: кількість, статуси, середня оцінка, топ-3."""
-    movies = storage.load()
-    return jsonify({
-        "total": len(movies),
-        "by_status": logic.count_by_status(movies),
-        "average_rating": logic.average_rating(movies),
-        "top_rated": [m.to_dict() for m in logic.top_rated(movies, 3)],
-    })
+# Помилки теж JSON, а не HTML-сторінка.
+@app.errorhandler(401)
+def unauthorized(error):
+    return jsonify({"error": "потрібно увійти"}), 401
 
 
-@app.get("/report/statuses")
-def report_statuses():
-    """Звіт через JOIN: кількість фільмів і середня оцінка для кожного статусу."""
-    return jsonify(storage.status_report())
-
-
-# Невідома адреса, заборонено або неправильний метод: теж JSON, а не HTML-сторінка.
 @app.errorhandler(403)
 def forbidden(error):
     return jsonify({"error": "доступ заборонено"}), 403
